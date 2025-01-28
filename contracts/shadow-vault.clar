@@ -140,6 +140,17 @@
     )
 )
 
+(define-private (validate-proof (proof (list 20 (buff 32))))
+    (let (
+        (proof-length (len proof))
+    )
+        (and
+            (is-eq proof-length u20)
+            (fold and (map is-valid-hash? proof) true)
+        )
+    )
+)
+
 ;; Public functions
 (define-public (deposit 
     (commitment (buff 32))
@@ -147,37 +158,29 @@
     (token <ft-trait>))
     (let (
         (leaf-index (var-get next-index))
+        (token-balance (unwrap! (contract-call? token get-balance tx-sender) ERR-INVALID-AMOUNT))
     )
-        ;; Basic checks
+        ;; Enhanced input validation
         (asserts! (> amount u0) ERR-INVALID-AMOUNT)
+        (asserts! (>= token-balance amount) ERR-INSUFFICIENT-BALANCE)
         (asserts! (not (is-eq commitment ZERO-VALUE)) ERR-INVALID-COMMITMENT)
         (asserts! (< leaf-index (pow u2 MERKLE-TREE-HEIGHT)) ERR-TREE-FULL)
         
-        ;; Transfer tokens
+        ;; Verify token implements SIP-010 before transfer
+        (unwrap! (contract-call? token get-decimals) ERR-NOT-AUTHORIZED)
+        
+        ;; Transfer tokens with validated amount
         (try! (contract-call? token transfer amount tx-sender (as-contract tx-sender) none))
         
-        ;; Set leaf node
+        ;; Rest of the deposit logic remains the same
         (set-tree-node u0 leaf-index commitment)
-        
-        ;; Update level 0 -> 1
         (update-parent-at-level u0 leaf-index)
-        
-        ;; Update level 1 -> 2
         (update-parent-at-level u1 (/ leaf-index u2))
-        
-        ;; Update level 2 -> 3
         (update-parent-at-level u2 (/ leaf-index u4))
-        
-        ;; Update level 3 -> 4
         (update-parent-at-level u3 (/ leaf-index u8))
-        
-        ;; Update level 4 -> 5
         (update-parent-at-level u4 (/ leaf-index u16))
-        
-        ;; Update level 5 -> 6
         (update-parent-at-level u5 (/ leaf-index u32))
         
-        ;; Record deposit info
         (map-set deposits 
             {commitment: commitment}
             {
@@ -185,7 +188,6 @@
                 timestamp: stacks-block-height
             })
         
-        ;; Update next index
         (var-set next-index (+ leaf-index u1))
         
         (ok leaf-index)
@@ -200,16 +202,32 @@
     (token <ft-trait>)
     (amount uint))
     (begin
+        ;; Enhanced input validation
+        (asserts! (> amount u0) ERR-INVALID-AMOUNT)
+        (asserts! (not (is-eq nullifier ZERO-VALUE)) ERR-INVALID-COMMITMENT)
+        (asserts! (not (is-eq root ZERO-VALUE)) ERR-INVALID-COMMITMENT)
+        (asserts! (validate-proof proof) ERR-INVALID-PROOF)
+        
+        ;; Verify token implements SIP-010
+        (unwrap! (contract-call? token get-decimals) ERR-NOT-AUTHORIZED)
+        
+        ;; Verify contract has sufficient balance
+        (let (
+            (contract-balance (unwrap! (contract-call? token get-balance (as-contract tx-sender)) ERR-INSUFFICIENT-BALANCE))
+        )
+            (asserts! (>= contract-balance amount) ERR-INSUFFICIENT-BALANCE)
+        )
+        
         ;; Verify nullifier hasn't been used
         (asserts! (is-none (map-get? nullifiers {nullifier: nullifier})) ERR-NULLIFIER-ALREADY-EXISTS)
         
-        ;; Verify the merkle proof
+        ;; Verify the merkle proof with validated inputs
         (try! (verify-merkle-proof nullifier proof root))
         
         ;; Mark nullifier as used
         (map-set nullifiers {nullifier: nullifier} {used: true})
         
-        ;; Transfer tokens to recipient
+        ;; Transfer tokens to recipient with validated amount
         (try! (as-contract (contract-call? token transfer amount tx-sender recipient none)))
         
         (ok true)
