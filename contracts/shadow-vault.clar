@@ -182,7 +182,7 @@
             {commitment: commitment}
             {
                 leaf-index: leaf-index,
-                timestamp: block-height
+                timestamp: stacks-block-height
             })
         
         ;; Update next index
